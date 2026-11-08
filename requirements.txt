@@ -1,0 +1,6 @@
+numpy<2
+matplotlib
+torch
+pyarrow<19
+streamlit
+streamlit-drawable-canvas==0.9.3

@@ -18,10 +18,10 @@ from gpt_model import Character_GPT
 
 class CharDataset(Dataset):
     def __init__(self, data):
-        #Configure block size
+        # Cấu hình kích thước khối (block size)
         self.block_size = 10
 
-        #Define possible characters, and create mapping from number to character
+        # Xác định các ký tự có thể có và tạo ánh xạ giữa số và ký tự
         chars = sorted(list(set(data)))
         self.index2char = { i:ch for i,ch in enumerate(chars) }
         self.char2index = { ch:i for i,ch in enumerate(chars) }
@@ -33,11 +33,11 @@ class CharDataset(Dataset):
         return len(self.data) - self.block_size
 
     def __getitem__(self, idx):
-        # grab a chunk of (block_size + 1) characters from the data
+        # Lấy một đoạn gồm (block_size + 1) ký tự từ dữ liệu
         chunk = self.data[idx:idx + self.block_size + 1]
-        # encode every character to an integer
+        # Mã hóa mỗi ký tự thành một số nguyên
         dix = [self.char2index[s] for s in chunk]
-        # return as tensors
+        # Trả về dưới dạng các tensor
         x = torch.tensor(dix[:-1], dtype=torch.long)
         y = torch.tensor(dix[1:],dtype=torch.long)
         return x, y
@@ -53,10 +53,10 @@ def train_single_iteration(model, data_iter):
     batch = [t for t in batch]
     x, y = batch
 
-    # forward the model
+    # Chạy forward mô hình
     loss = model.get_loss(x, y)
 
-    # backprop and update the parameters
+    # Lan truyền ngược và cập nhật tham số
     model.zero_grad(set_to_none=True)
     loss.backward()
    
@@ -64,21 +64,21 @@ def train_single_iteration(model, data_iter):
 
  
 if __name__ == '__main__':
-    #Variables to configure
+    # Các biến cấu hình
     learning_rate = 0.0004
     num_iterations = 10000
     batch_size = 500 
-    checkpoint = 100 #How often to print out results of the model during training
-    context = "Pacman" #Generative prompt
+    checkpoint = 100 # Tần suất in kết quả của mô hình trong quá trình huấn luyện
+    context = "Pacman" # Prompt dùng để sinh văn bản
     layer_size = 100
-    n_layer = 6 #How many transformer blocks to have
+    n_layer = 6 # Số lượng khối transformer cần tạo
 
 
-    # construct the training dataset
+    # Xây dựng tập dữ liệu huấn luyện
     text = open('input.txt', 'r').read() 
     train_dataset = CharDataset(text)
 
-    # setup the dataloader
+    # Thiết lập dataloader
     train_loader = DataLoader(
         train_dataset,
         sampler=torch.utils.data.RandomSampler(train_dataset, replacement=True, num_samples=int(1e10)),
@@ -90,9 +90,9 @@ if __name__ == '__main__':
 
     train_iterations = iter(train_loader)
 
-    #set up model and optimizer
+    # Thiết lập mô hình và optimizer
     model = Character_GPT(train_dataset.block_size, n_embd=layer_size, n_layer=n_layer, vocab_size=train_dataset.vocab_size)
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.00004)
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.0004)
 
 
     for i in range(num_iterations):
@@ -102,7 +102,7 @@ if __name__ == '__main__':
             with torch.no_grad():
                 print("Iteration: " + str(i) + "\n")
                 
-                # sample from the model...
+                # Lấy mẫu từ mô hình...
                 print("Prompt: " + context)
                 print("Generated result: ")
                 x = torch.tensor([train_dataset.char2index[s] for s in context])[None,...]
