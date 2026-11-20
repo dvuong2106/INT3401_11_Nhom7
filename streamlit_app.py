@@ -1,3 +1,5 @@
+from io import BytesIO
+
 import numpy as np
 import streamlit as st
 import torch
@@ -60,7 +62,12 @@ def train_q3_model():
     dataset = backend.DigitClassificationDataset(model)
     train_digitclassifier(model, dataset)
     model.eval()
-    return model, dataset
+    with torch.no_grad():
+        predictions = []
+        test_images = torch.tensor(dataset.test_images, dtype=torch.float32)
+        for batch in test_images.split(512):
+            predictions.extend(model(batch).argmax(dim=1).cpu().tolist())
+    return model, dataset, np.asarray(predictions)
 
 
 @st.cache_resource(show_spinner=False)
@@ -70,7 +77,10 @@ def train_q4_model():
     dataset = backend.LanguageIDDataset(model)
     train_languageid(model, dataset)
     model.eval()
-    return model, dataset
+    with torch.no_grad():
+        _, predictions, labels = dataset._predict()
+    predictions = np.asarray([int(prediction.item()) for prediction in predictions])
+    return model, dataset, predictions, np.asarray(labels)
 
 
 @st.cache_resource(show_spinner=False)
@@ -82,10 +92,9 @@ def train_q5_model():
     model.eval()
     with torch.no_grad():
         logits = model(torch.tensor(dataset.test_images, dtype=torch.float32))
-        accuracy = float(
-            (logits.argmax(dim=1).cpu().numpy() == dataset.test_labels).mean()
-        )
-    return model, dataset, accuracy
+        predictions = logits.argmax(dim=1).cpu().numpy()
+    accuracy = float((predictions == dataset.test_labels).mean())
+    return model, dataset, accuracy, predictions
 
 
 @st.cache_resource(show_spinner=False)
@@ -157,6 +166,55 @@ def draw_decision_boundary(ax, weights: np.ndarray, label: str, **kwargs) -> Non
         ax.plot(x_values, y_values, label=label, **kwargs)
     elif abs(weights[0]) > 1e-8:
         ax.axvline(-weights[2] / weights[0], label=label, **kwargs)
+
+
+def plot_confusion_matrix(
+    labels: np.ndarray,
+    predictions: np.ndarray,
+    class_names: list[str],
+    title: str,
+) -> plt.Figure:
+    matrix = np.zeros((len(class_names), len(class_names)), dtype=int)
+    np.add.at(matrix, (labels, predictions), 1)
+
+    figure, axis = plt.subplots(figsize=(8, 6))
+    image = axis.imshow(matrix, cmap="Blues")
+    figure.colorbar(image, ax=axis, label="Số lượng")
+    axis.set(
+        xticks=range(len(class_names)),
+        yticks=range(len(class_names)),
+        xticklabels=class_names,
+        yticklabels=class_names,
+        xlabel="Nhãn dự đoán",
+        ylabel="Nhãn thực tế",
+        title=title,
+    )
+    axis.tick_params(axis="x", labelrotation=45)
+    threshold = matrix.max() / 2 if matrix.size else 0
+    for row in range(len(class_names)):
+        for column in range(len(class_names)):
+            axis.text(
+                column,
+                row,
+                str(matrix[row, column]),
+                ha="center",
+                va="center",
+                color="white" if matrix[row, column] > threshold else "black",
+            )
+    figure.tight_layout()
+    return figure
+
+
+def add_figure_download(figure: plt.Figure, filename: str, key: str) -> None:
+    image = BytesIO()
+    figure.savefig(image, format="png", dpi=300, bbox_inches="tight")
+    st.download_button(
+        "Tải biểu đồ PNG (300 DPI)",
+        data=image.getvalue(),
+        file_name=filename,
+        mime="image/png",
+        key=key,
+    )
 
 
 st.set_page_config(page_title="Mô phỏng Q1–Q6", page_icon="🧠", layout="wide")
@@ -308,12 +366,12 @@ with q3_tab:
     model = None
     dataset = None
     if st.session_state.get("q3_model_ready", False):
-        model, dataset = train_q3_model()
+        model, dataset, test_predictions = train_q3_model()
     else:
         st.info("Cần huấn luyện mô hình trước khi mô phỏng.")
         if st.button("Huấn luyện mô hình Q3", type="primary"):
             with st.spinner("Đang huấn luyện trên MNIST. Lần đầu có thể mất vài phút..."):
-                model, dataset = train_q3_model()
+                model, dataset, test_predictions = train_q3_model()
             st.session_state.q3_model_ready = True
             st.success(
                 f"Huấn luyện xong — độ chính xác validation: "
@@ -321,9 +379,29 @@ with q3_tab:
             )
 
     if model is None and st.session_state.get("q3_model_ready", False):
-        model, dataset = train_q3_model()
+        model, dataset, test_predictions = train_q3_model()
 
     if model is not None and dataset is not None:
+        test_accuracy = float(np.mean(test_predictions == dataset.test_labels))
+        st.metric(
+            "Độ chính xác trên tập kiểm tra Q3",
+            f"{test_accuracy:.2%}",
+            help=f"Đánh giá trên {len(dataset.test_labels)} ảnh MNIST.",
+        )
+        confusion_figure = plot_confusion_matrix(
+            dataset.test_labels,
+            test_predictions,
+            [str(digit) for digit in range(10)],
+            "Q3 — Ma trận nhầm lẫn trên tập kiểm tra MNIST",
+        )
+        st.pyplot(confusion_figure)
+        add_figure_download(
+            confusion_figure,
+            "q3-ma-tran-nham-lan.png",
+            "download_q3_confusion_matrix",
+        )
+        plt.close(confusion_figure)
+
         input_mode = st.radio(
             "Chọn đầu vào",
             ["Vẽ chữ số", "Ảnh mẫu MNIST", "Tải ảnh lên"],
@@ -410,7 +488,7 @@ with q4_tab:
         st.info("Huấn luyện RNN trên bộ dữ liệu nhận diện ngôn ngữ để bắt đầu.")
         if st.button("Huấn luyện mô hình Q4", type="primary"):
             with st.spinner("Đang huấn luyện RNN trên dữ liệu Q4..."):
-                model, dataset = train_q4_model()
+                model, dataset, test_predictions, test_labels = train_q4_model()
             st.session_state.q4_model_ready = True
             st.success(
                 f"Huấn luyện xong — độ chính xác validation: "
@@ -418,7 +496,27 @@ with q4_tab:
             )
 
     if st.session_state.get("q4_model_ready", False):
-        model, dataset = train_q4_model()
+        model, dataset, test_predictions, test_labels = train_q4_model()
+        test_accuracy = float(np.mean(test_predictions == test_labels))
+        st.metric(
+            "Độ chính xác trên tập kiểm tra Q4",
+            f"{test_accuracy:.2%}",
+            help=f"Đánh giá trên {len(test_labels)} từ.",
+        )
+        confusion_figure = plot_confusion_matrix(
+            test_labels,
+            test_predictions,
+            [str(name) for name in dataset.language_names],
+            "Q4 — Ma trận nhầm lẫn ngôn ngữ trên tập kiểm tra",
+        )
+        st.pyplot(confusion_figure)
+        add_figure_download(
+            confusion_figure,
+            "q4-ma-tran-nham-lan.png",
+            "download_q4_confusion_matrix",
+        )
+        plt.close(confusion_figure)
+
         word = st.text_input("Nhập một từ", value="hello", max_chars=20).lower()
         if st.button("Nhận diện ngôn ngữ", type="primary"):
             chars = dataset.chars.tolist()
@@ -460,12 +558,34 @@ with q5_tab:
         st.info("Huấn luyện CNN trên dữ liệu Q5 để xem dự đoán và feature map.")
         if st.button("Huấn luyện mô hình Q5", type="primary"):
             with st.spinner("Đang huấn luyện CNN trên dữ liệu Q5..."):
-                model, dataset, test_accuracy = train_q5_model()
+                model, dataset, test_accuracy, test_predictions = train_q5_model()
             st.session_state.q5_model_ready = True
-            st.success(f"Huấn luyện xong — độ chính xác tập kiểm tra: {test_accuracy:.2%}")
+            st.success(f"Huấn luyện xong — độ chính xác tập đánh giá: {test_accuracy:.2%}")
 
     if st.session_state.get("q5_model_ready", False):
-        model, dataset, test_accuracy = train_q5_model()
+        model, dataset, test_accuracy, test_predictions = train_q5_model()
+        st.metric(
+            "Độ chính xác trên tập đánh giá Q5",
+            f"{test_accuracy:.2%}",
+            help=(
+                f"Tập đánh giá gồm {len(dataset.test_labels)} ảnh MNIST "
+                "được chọn từ phần dữ liệu huấn luyện."
+            ),
+        )
+        confusion_figure = plot_confusion_matrix(
+            dataset.test_labels,
+            test_predictions,
+            [str(digit) for digit in range(10)],
+            "Q5 — Ma trận nhầm lẫn CNN trên tập đánh giá",
+        )
+        st.pyplot(confusion_figure)
+        add_figure_download(
+            confusion_figure,
+            "q5-ma-tran-nham-lan.png",
+            "download_q5_confusion_matrix",
+        )
+        plt.close(confusion_figure)
+
         sample_index = st.slider(
             "Chọn ảnh kiểm tra Q5",
             min_value=0,
@@ -497,6 +617,11 @@ with q5_tab:
         activation_axis.set_title("Feature map sau tích chập 3×3")
         activation_axis.axis("off")
         activation_column.pyplot(activation_figure)
+        add_figure_download(
+            activation_figure,
+            "q5-feature-map.png",
+            "download_q5_feature_map",
+        )
         plt.close(activation_figure)
 
         prediction_column, accuracy_column = st.columns(2)
@@ -505,7 +630,7 @@ with q5_tab:
             prediction,
             f"Độ tin cậy {probabilities[prediction].item():.1%}",
         )
-        accuracy_column.metric("Độ chính xác tập kiểm tra Q5", f"{test_accuracy:.2%}")
+        accuracy_column.metric("Độ chính xác tập đánh giá Q5", f"{test_accuracy:.2%}")
         if prediction == label:
             st.success("Mô hình dự đoán đúng.")
         else:
@@ -584,6 +709,11 @@ with q6_tab:
                         va="center",
                     )
             matrix_column.pyplot(attention_figure)
+            add_figure_download(
+                attention_figure,
+                "q6-ban-do-trong-so-attention.png",
+                "download_q6_attention",
+            )
             plt.close(attention_figure)
             output_column.write("Embedding đầu ra sau attention:")
             output_column.dataframe(
